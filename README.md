@@ -106,7 +106,7 @@ El repositorio está estructurado modularmente para garantizar la reproducibilid
 │   └── 📁 modeling                       # Jupyter Notebook: Entrenamiento y Tuning
 ├── ⚙️ .gitignore                          # Exclusiones de Git (archivos temporales y entornos)
 ├── 📄 README.md                          # Guía principal del repositorio (Este archivo)
-└── 📋 requirements.txt                   # Listado completo de dependencias del entorno ```
+└── 📋 requirements.txt                   # Listado completo de dependencias del entorno 
 
 ## 📊Resumen Ejecutivo del Pipeline
 **🔍 Fase 1: Hallazgos de Análisis Exploratorio (EDA)** 
