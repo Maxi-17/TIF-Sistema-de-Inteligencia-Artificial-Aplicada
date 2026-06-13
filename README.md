@@ -79,7 +79,7 @@ El modelo logra clasificar de forma correcta 277 transacciones comerciales del c
 ## 📂 Arquitectura de Directorios y Archivos
 El repositorio está estructurado modularmente para garantizar la reproducibilidad y el orden de los artefactos predictivos, analíticos y de interfaz:
 
-'''text
+```text
 📦 proyecto-modelado-ia
 ├── 📁 .venv                              # Entorno virtual local 
 ├── 📁 apps                               # Capa de visualización y lógica de inferencia
@@ -106,7 +106,7 @@ El repositorio está estructurado modularmente para garantizar la reproducibilid
 │   └── 📁 modeling                       # Jupyter Notebook: Entrenamiento y Tuning
 ├── ⚙️ .gitignore                          # Exclusiones de Git (archivos temporales y entornos)
 ├── 📄 README.md                          # Guía principal del repositorio (Este archivo)
-└── 📋 requirements.txt                   # Listado completo de dependencias del entorno '''
+└── 📋 requirements.txt                   # Listado completo de dependencias del entorno ```
 
 ## 📊Resumen Ejecutivo del Pipeline
 **🔍 Fase 1: Hallazgos de Análisis Exploratorio (EDA)** 
