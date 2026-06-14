@@ -6,6 +6,7 @@ Cómo ejecutar (desde la raíz del proyecto):
 
 ```powershell
 python -m pip install -r requirements.txt
+
 streamlit run apps/streamlit_app.py
 ```
 
