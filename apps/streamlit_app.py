@@ -19,6 +19,24 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import google.generativeai as genai
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.axes
+
+# Parche temporal global para evitar ParseException de mathtext en Matplotlib con etiquetas LaTeX de SHAP
+original_set_xticklabels = matplotlib.axes.Axes.set_xticklabels
+def safe_set_xticklabels(self, labels, *args, **kwargs):
+    cleaned_labels = []
+    for label in labels:
+        if isinstance(label, str):
+            cleaned_labels.append(label.replace("$", ""))
+        else:
+            cleaned_labels.append(label)
+    return original_set_xticklabels(self, cleaned_labels, *args, **kwargs)
+matplotlib.axes.Axes.set_xticklabels = safe_set_xticklabels
+
+import matplotlib.pyplot as plt
+import shap
 
 # Forzar la API v1 estable en las llamadas internas de la SDK
 try:
@@ -56,6 +74,27 @@ def load_artifacts():
     return model, preprocessor
 
 model, preprocessor = load_artifacts()
+
+# Muestra de entrenamiento para SHAP (usada como fondo para probabilidad y para SHAP Global)
+@st.cache_resource(show_spinner="Calculando explicabilidad global SHAP (esto tomará solo unos segundos)...")
+def get_shap_explainer_and_global_explanation(_model_pipeline, sample_size=100):
+    try:
+        X_test_path = root / "data" / "processed" / "X_test_processed.csv"
+        if X_test_path.exists():
+            X_test = pd.read_csv(X_test_path, index_col=0)
+            # Tomar una muestra fija/reproducible
+            X_sample = X_test.sample(n=min(sample_size, len(X_test)), random_state=42)
+            clf = _model_pipeline.named_steps['clf']
+            
+            # TreeExplainer usando los datos de test como fondo para obtener probabilidades reales
+            explainer = shap.TreeExplainer(clf, data=X_sample, model_output="probability")
+            shap_values = explainer(X_sample)
+            return explainer, shap_values, X_sample
+    except Exception as e:
+        st.sidebar.error(f"Error al inicializar SHAP: {e}")
+    return None, None, None
+
+explainer, shap_values_global, X_sample_global = get_shap_explainer_and_global_explanation(model)
 
 # Función para construir el medidor visual interactivo (Gauge)
 def build_indicator_gauge(prob: float, title: str = "Probabilidad"):
@@ -183,28 +222,206 @@ else:
                     * 🟡 **Intención Media (35% - 65%):** El usuario evalúa alternativas. Activar un banner interactivo con envío gratis o cupones de descuento por tiempo limitado.
                     * 🟢 **Conversión Inminente (65% - 100%):** Cliente decidido. Optimizar el checkout reduciendo campos de pago para evitar la fricción final.
                     """)
+                
+                # Explicabilidad local interactiva (SHAP Waterfall Plot)
+                if explainer is not None and preprocessor is not None:
+                    st.divider()
+                    st.subheader("🔍 Explicabilidad en Tiempo Real (¿Por qué el modelo tomó esta decisión?)")
+                    st.write("""
+                    El gráfico **SHAP Waterfall** de abajo muestra cómo afectó cada comportamiento de navegación a la probabilidad final de compra del cliente.
+                    Las barras rojas indican factores que **aumentaron** la intención de compra, y las barras azules indican factores que la **disminuyeron** (medido en variación de probabilidad de 0 a 1).
+                    """)
+                    
+                    try:
+                        # 1. Obtener nombres de columnas esperadas
+                        if hasattr(preprocessor, 'feature_names_in_'):
+                            expected_cols = list(preprocessor.feature_names_in_)
+                        else:
+                            expected_cols = list(model.feature_names_in_)
+                            
+                        # 2. Preparar el DataFrame alineado
+                        from apps.utils import prepare_input_dataframe
+                        df_single = prepare_input_dataframe(inputs_dict, expected_columns=expected_cols, categorical_columns=[])
+                        
+                        # 3. Transformar con el preprocesador
+                        X_single_transformed = preprocessor.transform(df_single)
+                        
+                        # 4. Obtener nombres legibles de variables transformadas
+                        if hasattr(preprocessor, 'get_feature_names_out'):
+                            feat_names = list(preprocessor.get_feature_names_out())
+                            feat_names = [f.split("__")[-1] for f in feat_names]
+                        else:
+                            feat_names = [f"Var_{i}" for i in range(X_single_transformed.shape[1])]
+                            
+                        # 5. Crear DataFrame final transformado
+                        X_single_df = pd.DataFrame(X_single_transformed, columns=feat_names)
+                        
+                        # 6. Calcular e individualizar la predicción
+                        shap_values_single = explainer(X_single_df)
+                        
+                        # Graficar en matplotlib de forma no interactiva
+                        fig, ax = plt.subplots(figsize=(10, 5))
+                        shap.plots.waterfall(shap_values_single[0], max_display=10, show=False)
+                        
+                        # Limpiar los símbolos '$' de todos los textos del gráfico para evitar errores del mathtext parser en Windows
+                        for t in fig.findobj(lambda x: hasattr(x, 'get_text')):
+                            txt = t.get_text()
+                            if "$" in txt:
+                                t.set_text(txt.replace("$", ""))
+                                
+                        plt.title("Contribución de Variables a la Probabilidad de Compra (SHAP Local)", fontsize=13, fontweight="bold", pad=15)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    except Exception as e_shap:
+                        st.warning(f"No se pudo renderizar el gráfico SHAP local: {e_shap}")
 
             except Exception as ex:
                 st.error(f"Ocurrió un error al procesar la inferencia en el pipeline: {ex}.")
 
     with tab_metricas:
-        st.header("Métricas de Rendimiento y Calidad (XGBoost Classifier)")
-        st.write("Estadísticas extraídas del conjunto de prueba independiente para validar el sistema:")
+        st.header("📊 Métricas de Rendimiento y Calidad (XGBoost Classifier)")
+        st.write("Estadísticas de validación extraídas del conjunto de prueba independiente:")
         
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(label="Exactitud (Accuracy Global)", value="88.20 %")
-        c2.metric(label="Área Bajo la Curva (ROC-AUC)", value="0.9205")
-        c3.metric(label="Sensibilidad (Recall - Captura de Compras)", value="72.51 %")
-        c4.metric(label="Puntuación F1 (F1-Score)", value="0.6580")
+        # Tarjetas de métricas estilizadas
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            st.markdown(
+                '<div style="background-color:rgba(30,144,255,0.08); padding: 18px; border-radius: 8px; border-left: 5px solid #1E90FF; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">'
+                '<h5 style="margin:0; font-size:14px; color:#555; font-family:sans-serif;">Exactitud (Accuracy)</h5>'
+                '<h2 style="margin:8px 0 0 0; color:#1E90FF; font-size:26px; font-family:sans-serif; font-weight:bold;">88.20%</h2>'
+                '</div>', 
+                unsafe_allow_html=True
+            )
+        with col_m2:
+            st.markdown(
+                '<div style="background-color:rgba(46,139,87,0.08); padding: 18px; border-radius: 8px; border-left: 5px solid #2E8B57; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">'
+                '<h5 style="margin:0; font-size:14px; color:#555; font-family:sans-serif;">ROC-AUC</h5>'
+                '<h2 style="margin:8px 0 0 0; color:#2E8B57; font-size:26px; font-family:sans-serif; font-weight:bold;">0.9205</h2>'
+                '</div>', 
+                unsafe_allow_html=True
+            )
+        with col_m3:
+            st.markdown(
+                '<div style="background-color:rgba(218,165,32,0.08); padding: 18px; border-radius: 8px; border-left: 5px solid #DAA520; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">'
+                '<h5 style="margin:0; font-size:14px; color:#555; font-family:sans-serif;">Sensibilidad (Recall)</h5>'
+                '<h2 style="margin:8px 0 0 0; color:#DAA520; font-size:26px; font-family:sans-serif; font-weight:bold;">72.51%</h2>'
+                '</div>', 
+                unsafe_allow_html=True
+            )
+        with col_m4:
+            st.markdown(
+                '<div style="background-color:rgba(255,20,147,0.08); padding: 18px; border-radius: 8px; border-left: 5px solid #FF1493; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">'
+                '<h5 style="margin:0; font-size:14px; color:#555; font-family:sans-serif;">F1-Score</h5>'
+                '<h2 style="margin:8px 0 0 0; color:#FF1493; font-size:26px; font-family:sans-serif; font-weight:bold;">0.6580</h2>'
+                '</div>', 
+                unsafe_allow_html=True
+            )
+            
+        # Explicación breve de cada métrica debajo de sus tarjetas
+        col_desc1, col_desc2, col_desc3, col_desc4 = st.columns(4)
+        with col_desc1:
+            st.caption("🎯 **¿Qué es?** Porcentaje total de predicciones correctas (tanto visitas que compran como las que no).")
+        with col_desc2:
+            st.caption("📈 **¿Qué es?** Capacidad del modelo para distinguir a un comprador de un no comprador (de 0 a 1).")
+        with col_desc3:
+            st.caption("🔍 **¿Qué es?** Porcentaje de las compras reales que el modelo logró detectar con éxito.")
+        with col_desc4:
+            st.caption("⚖️ **¿Qué es?** Balance entre precisión (evitar falsas alarmas) y sensibilidad (no perder ventas).")
+            
+        st.write("")
+        st.divider()
         
-        st.markdown("---")
+        # Sub-pestañas para organizar gráficos
+        subtab_shap, subtab_importance, subtab_confusion, subtab_curves = st.tabs([
+            "🔍 Explicabilidad SHAP Global",
+            "📊 Importancia XGBoost",
+            "🎯 Matriz de Confusión",
+            "📈 Curvas ROC y Comparaciones"
+        ])
         
-        # Carga dinámica del gráfico de importancia si existe en models/
-        im_path = root / 'models' / 'feature_importance_xgboost.png'
-        if pprocessor_path := root / 'models' / 'feature_importance_xgboost.png':
+        with subtab_shap:
+            st.subheader("🔍 Impacto Global de Características (SHAP Summary Plot)")
+            st.write("""
+            El siguiente gráfico **SHAP Summary Plot** muestra la contribución de cada variable a nivel global 
+            utilizando una muestra representativa del conjunto de test.
+            
+            * **Eje X (SHAP Value):** Indica si la característica aumentó (derecha) o disminuyó (izquierda) la probabilidad de compra en cada sesión individual.
+            * **Color (Feature Value):** Representa el valor relativo de la variable (el **rojo** representa valores altos y el **azul** representa valores bajos).
+            * *Ejemplo:* Los puntos rojos agrupados a la derecha en `PageValues` demuestran que valores altos en esta variable empujan fuertemente la predicción hacia **Compra**.
+            """)
+            if shap_values_global is not None and X_sample_global is not None:
+                try:
+                    # Limpiar nombres de columnas en la muestra global para el plot
+                    X_sample_global_clean = X_sample_global.copy()
+                    clean_cols = [c.split("__")[-1] for c in X_sample_global_clean.columns]
+                    X_sample_global_clean.columns = clean_cols
+                    
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    shap.summary_plot(shap_values_global, X_sample_global_clean, show=False)
+                    
+                    # Limpiar los símbolos '$' de todos los textos del gráfico para evitar errores de mathtext
+                    for t in fig.findobj(lambda x: hasattr(x, 'get_text')):
+                        txt = t.get_text()
+                        if "$" in txt:
+                            t.set_text(txt.replace("$", ""))
+                            
+                    plt.title("Gráfico de Resumen SHAP Global", fontsize=13, fontweight="bold", pad=15)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
+                except Exception as e_glob:
+                    st.error(f"Ocurrió un error al renderizar el gráfico SHAP global: {e_glob}")
+            else:
+                st.warning("No se pudieron cargar los datos de test procesados para computar el gráfico SHAP global.")
+                
+        with subtab_importance:
+            st.subheader("📊 Importancia Estructural de Características")
+            st.write("""
+            Este gráfico representa la importancia de las características basada en la ganancia promedio (Gain) 
+            que aporta cada variable al árbol de decisión XGBoost. Muestra cómo divide el modelo la información estructuralmente.
+            """)
+            im_path = root / 'models' / 'feature_importance_xgboost.png'
             if im_path.exists():
-                st.subheader("📊 Gráfico de Importancia Estructural de Características")
-                st.image(str(im_path), caption="Importancia de atributos calculada nativamente por el core de XGBoost.", use_container_width=True)
+                st.image(str(im_path), caption="Importancia de atributos nativa del modelo XGBoost.", use_container_width=True)
+            else:
+                st.info("Gráfico de importancia estructural no disponible en la carpeta de modelos.")
+                
+        with subtab_confusion:
+            st.subheader("🎯 Matriz de Confusión")
+            st.write("""
+            La matriz de confusión evalúa los aciertos y fallas del modelo en el conjunto de test:
+            
+            * **Verdaderos Positivos (TP - 277):** Compras reales que el modelo identificó correctamente.
+            * **Verdaderos Negativos (TN - 1876):** Sesiones sin compra que el modelo clasificó correctamente como NO compra.
+            * **Falsos Positivos (FP - 183):** Alertas falsas (el modelo predijo compra pero el cliente no compró).
+            * **Falsos Negativos (FN - 105):** Compras reales perdidas (el modelo predijo que no comprarían pero sí compraron).
+            """)
+            cm_path = root / 'models' / 'confusion_matrix_xgboost.png'
+            if cm_path.exists():
+                st.image(str(cm_path), caption="Matriz de confusión del modelo ganador (XGBoost).", use_container_width=True)
+            else:
+                st.info("Gráfico de la matriz de confusión no disponible en la carpeta de modelos.")
+                
+        with subtab_curves:
+            st.subheader("📈 Curvas de Rendimiento (ROC Curves)")
+            st.write("""
+            La curva ROC y el valor AUC (Área bajo la curva) miden la capacidad de discriminación del modelo a través de distintos umbrales de decisión. Un AUC de 0.92 indica un excelente nivel predictivo.
+            """)
+            
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                roc_path = root / 'models' / 'roc_curve_xgboost.png'
+                if roc_path.exists():
+                    st.image(str(roc_path), caption="Curva ROC del XGBoost (Ganador).", use_container_width=True)
+                else:
+                    st.info("Curva ROC del ganador no disponible.")
+            with col_c2:
+                comp_path = root / 'models' / 'roc_curves_comparacion.png'
+                if comp_path.exists():
+                    st.image(str(comp_path), caption="Comparativa de curvas ROC de modelos evaluados.", use_container_width=True)
+                else:
+                    st.info("Curva comparativa de modelos no disponible.")
 
     # Intentar obtener la API key de los secretos de Streamlit de forma segura
     try:
@@ -233,19 +450,32 @@ else:
 
     with tab_hibrido:
         st.header("🤖 Ecosistema Híbrido Conversacional RAG")
-        st.write("Consulta al Agente Inteligente de E-commerce. Responde en tiempo real basándose en las políticas comerciales y las predicciones.")
+        
+        # Columnas explicativas de la arquitectura (Marco de Integración & Simulación Corporativa)
+        col_marco, col_simulacion = st.columns(2)
+        with col_marco:
+            st.markdown("""
+            ### 📋 Marco de Integración
+            En sintonía con las directivas de la materia, la evolución de esta aplicación local hacia producción contempla la orquestación de un **Agente RAG híbrido**:
+            
+            * **Conexión de Datos:** La interfaz recupera de forma directa (In-Memory Retrieval) el contenido de nuestras **políticas comerciales no estructuradas** desde el archivo [politicas_comerciales.txt](file:///c:/Users/Waltter/Desktop/proyectossadsad/Ciencia%20de%20Datos%20e%20Inteligencia%20Artificial%20Aplicada/Modelado/Prediccion%20de%20Intencion%20de%20Compra%20en%20E-commerce/data/politicas_comerciales.txt), inyectándolo dinámicamente como contexto en la ventana del LLM.
+            * **Llamada a Funciones (Híbrida):** En lugar de herramientas externas de orquestación complejas, el LLM (*Gemini 2.5 Flash*) interactúa con el estado de la aplicación recuperando las predicciones probabilísticas de nuestro binario **XGBoost** a través de `st.session_state` en tiempo real.
+            """)
+        with col_simulacion:
+            st.markdown("""
+            ### 💬 Simulación de Interrogación Corporativa
+            Simulá una consulta en lenguaje natural realizada por el gerente de Marketing o del equipo comercial del E-commerce hacia el ecosistema híbrido propuesto:
+            
+            **Consultas corporativas sugeridas para probar:**
+            * *¿Qué opinás del nuevo usuario ingresado?* (ejecutando primero la simulación en la pestaña *Simulador de Sesión*).
+            * *¿Qué campaña de marketing o descuento deberíamos aplicar a este cliente en base a su probabilidad de conversión?*
+            * *¿Se deben activar pop-ups de salida o reducir campos de pago según nuestras políticas comerciales?*
+            """)
+        
+        st.divider()
 
         if not gemini_api_key:
             st.warning("⚠️ Se requiere una API Key de Gemini para activar el chat. Por favor, ingresala en el campo correspondiente de la barra lateral.")
-            
-            # Mostrar la explicación conceptual del bloque 3 si no está la API Key
-            st.markdown("""
-            ---
-            ### 📋 Concepto: Arquitectura Híbrida de IA
-            En sintonía con las directivas de la materia, esta pestaña implementa una **Arquitectura RAG (Retrieval-Augmented Generation)**:
-            1. **Conexión de Datos:** La interfaz captura los datos no estructurados de la empresa (políticas de descuento y marketing en `data/politicas_comerciales.txt`).
-            2. **Luz sobre el Contexto:** El LLM (*Gemini 1.5 Flash*) absorbe el contexto normativo y los datos probabilísticos del modelo **XGBoost** para dar respuestas comerciales precisas y no alucinadas.
-            """)
         else:
             import os
             os.environ["API_VERSION"] = "v1"
@@ -279,15 +509,20 @@ else:
             if "messages" not in st.session_state:
                 st.session_state.messages = []
 
-            # Mostrar historial de chat
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+            # Contenedor para que el historial de chat quede siempre arriba del input box
+            chat_container = st.container()
 
-            # Input de chat
+            # Mostrar historial de chat dentro del contenedor
+            with chat_container:
+                for msg in st.session_state.messages:
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+
+            # Input de chat (se renderiza abajo del contenedor)
             if prompt := st.chat_input("Preguntale al agente (ej. '¿Qué campaña aplico al cliente de la simulación?')"):
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+                with chat_container:
+                    with st.chat_message("user"):
+                        st.markdown(prompt)
                 st.session_state.messages.append({"role": "user", "content": prompt})
 
                 # Armar el contexto integrado (RAG + XGBoost)
@@ -324,10 +559,15 @@ else:
 
                 context += """
                 INSTRUCCIONES DE RESPUESTA:
-                1. Responde con un tono profesional, experto y comercial, muy claro.
-                2. Usa la Base de Conocimientos para justificar tus respuestas. Si la consulta se refiere a qué descuento o campaña aplicar, busca en las políticas y asociala al perfil del cliente.
-                3. Si hay datos de predicción disponibles, utilízalos para dar un diagnóstico personalizado y citá la probabilidad estimada por el modelo.
-                4. Mantén las respuestas fluidas y directas en español.
+                1. Responde con un tono profesional pero cercano, directo y muy fácil de entender. Evita tecnicismos innecesarios (como "XGBoost", "ExitRates" o "BounceRates") y explícalos de forma simple y natural para el equipo de ventas.
+                2. Integra las variables del cliente de forma fluida en la redacción, SIN ponerlas entre comillas (por ejemplo, escribe 'productos visitados' o 'probabilidad de abandono' con total naturalidad).
+                3. Evita mostrar valores numéricos crudos y abstractos (como decir "un interés de 1.0"). En su lugar, tradúcelos a términos cualitativos (por ejemplo, "interés moderado", "interés alto" o "sin interés comercial"). Las métricas de tiempo, cantidad de páginas y porcentajes sí los puedes citar directamente (ej. "pasó 50 segundos", "visitó 4 páginas", "tasa de salida del 2%").
+                4. En lugar de categorías numéricas o técnicas, clasifica la intención de compra del cliente así:
+                   - "Cliente muy decidido a comprar" (Intención alta).
+                   - "Cliente indeciso o evaluando opciones" (Intención media).
+                   - "Cliente que solo está explorando el sitio" (Intención baja).
+                5. Usa la Base de Conocimientos para justificar y sugerir acciones comerciales concretas basadas en las políticas de la empresa.
+                6. Mantén las respuestas fluidas, amigables y en español.
                 
                 --- HISTORIAL DE LA CONVERSACIÓN ---
                 """
@@ -341,36 +581,38 @@ else:
 
                 try:
                     import requests
-                    with st.spinner("Procesando consulta..."):
-                        # Llamada directa HTTP a la API v1 de Gemini para evitar bugs de la SDK vieja
-                        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
-                        headers = {
-                            "Content-Type": "application/json"
-                        }
-                        payload = {
-                            "contents": [
-                                {
-                                    "parts": [
-                                        {"text": context}
-                                    ]
-                                }
-                            ]
-                        }
-                        
-                        response = requests.post(url, headers=headers, json=payload)
-                        if response.status_code == 200:
-                            response_json = response.json()
-                            response_text = response_json['candidates'][0]['content']['parts'][0]['text']
-                        else:
-                            try:
-                                error_msg = response.json()['error']['message']
-                            except Exception:
-                                error_msg = response.text
-                            raise Exception(f"HTTP {response.status_code}: {error_msg}")
+                    with chat_container:
+                        with st.spinner("Procesando consulta..."):
+                            # Llamada directa HTTP a la API v1 de Gemini para evitar bugs de la SDK vieja
+                            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
+                            headers = {
+                                "Content-Type": "application/json"
+                            }
+                            payload = {
+                                "contents": [
+                                    {
+                                        "parts": [
+                                            {"text": context}
+                                        ]
+                                    }
+                                ]
+                            }
+                            
+                            response = requests.post(url, headers=headers, json=payload)
+                            if response.status_code == 200:
+                                response_json = response.json()
+                                response_text = response_json['candidates'][0]['content']['parts'][0]['text']
+                            else:
+                                try:
+                                    error_msg = response.json()['error']['message']
+                                except Exception:
+                                    error_msg = response.text
+                                raise Exception(f"HTTP {response.status_code}: {error_msg}")
 
-                    with st.chat_message("assistant"):
-                        st.markdown(response_text)
+                        with st.chat_message("assistant"):
+                            st.markdown(response_text)
                     st.session_state.messages.append({"role": "assistant", "content": response_text})
+                    st.rerun()
                     
                 except Exception as e:
                     st.error(f"Error al conectar con Gemini API: {e}")
