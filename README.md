@@ -81,6 +81,8 @@ El repositorio está estructurado modularmente para garantizar la reproducibilid
 
 ```text
 📦 proyecto-modelado-ia**
+├── 📁 .devcontainer/                     # Configuración de contenedor de desarrollo
+│   └── devcontainer.json                 # Definición del entorno (VS Code)
 ├── 📁 .venv                              # Entorno virtual local 
 ├── 📁 apps                               # Capa de visualización y lógica de inferencia
 │   ├── 📁 __pycache__
@@ -91,6 +93,7 @@ El repositorio está estructurado modularmente para garantizar la reproducibilid
 │   ├── 📁 processed                      # Particiones procesadas (X_train, y_train, etc.)
 │   └── 📁 raw                            # Datos sin procesar
 │       └── 📊 online_shoppers_intention.csv # Dataset histórico de navegación web
+│       └── politicas_comerciales.txt     # Reglas de negocio aplicadas
 ├── 📁 docs                               # Documentación y reportes de procesos
 │   └── 📄 preprocessing_report.txt       # Reporte generado de ingeniería de variables
 ├── 📁 models                             # Artefactos analíticos entrenados y gráficos
@@ -147,9 +150,11 @@ Siga estrictamente los siguientes pasos en su terminal local para inicializar el
 **Como ejecutar la demo:**
 La demo esta implementada con Streamlit en `apps/streamlit_app.py`.
 
+## *LOCAL*:
+
 ## 1. Clonar el repositorio y posicionarse en la raíz:
-**git clone [https://github.com/tu-usuario/tu-repositorio.git](https://github.com/tu-usuario/tu-repositorio.git)**
-**cd tu-repositorio**
+**git clone [https://github.com/Maxi-17/TIF-Sistema-de-Inteligencia-Artificial-Aplicada](https://github.com/Maxi-17/TIF-Sistema-de-Inteligencia-Artificial-Aplicada)**
+**cd TIF-Sistema-de-Inteligencia-Artificial-Aplicada**
 
 ## 2. Inicializar y activar el entorno virtual reproducible (.venv):
 En sistemas Windows (PowerShell):
@@ -171,3 +176,13 @@ Powershell:
 - Asegurate de tener `models/modelo_ganador.pkl` (y opcionalmente `models/preprocessor.pkl`) en la carpeta `models/`.
 - El modelo y los artefactos generados en el entrenamiento se guardan en `models/`.
 
+## *ENLACES DEL PROYECTO*:
+
+## *VERSIÓN ONLINE*:
+*ENLACE:*
+**https://tifmodelado-opcompra.streamlit.app/**
+
+
+## *PRESENTACIÓN DEL PROYECTO*:
+*ENLACE:*
+**https://gamma.app/docs/Prediccion-de-Intencion-de-Compra-en-E-commerce-enfeek22xpphd1g?mode=doc**
