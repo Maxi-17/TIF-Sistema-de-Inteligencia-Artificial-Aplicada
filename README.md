@@ -175,14 +175,14 @@ Powershell:
 - La consola generará la dirección local **http://localhost:8501**, la cual abrirá automáticamente en su navegador web las tres capas funcionales del tablero: el simulador interactivo de conversión, el monitor offline de métricas de calidad y la propuesta de extensión del Bloque 3
 - Asegurate de tener `models/modelo_ganador.pkl` (y opcionalmente `models/preprocessor.pkl`) en la carpeta `models/`.
 - El modelo y los artefactos generados en el entrenamiento se guardan en `models/`.
+---
+## 🚀 *ENLACES DEL PROYECTO*:
 
-## *ENLACES DEL PROYECTO*:
-
-## *VERSIÓN ONLINE*:
+## 🌐 *VERSIÓN ONLINE (App)*:
 *ENLACE:*
 **https://tifmodelado-opcompra.streamlit.app/**
 
 
-## *PRESENTACIÓN DEL PROYECTO*:
+## 📊*PRESENTACIÓN DEL PROYECTO*:
 *ENLACE:*
 **https://gamma.app/docs/Prediccion-de-Intencion-de-Compra-en-E-commerce-enfeek22xpphd1g?mode=doc**
